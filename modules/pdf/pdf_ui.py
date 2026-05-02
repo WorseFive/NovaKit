@@ -5,11 +5,13 @@ from datetime import datetime
 import flet as ft
 from PyPDF2 import PdfReader, PdfWriter
 
+from modules.i18n import _
 from modules.pdf.config import (
     COLOR_PALETTE,
     load_config, save_config, load_presets, save_presets, parse_page_range,
     get_system_fonts, parse_color,
 )
+from modules.settings import load_app_settings, save_app_settings, build_settings_dialog
 from modules.pdf.zip_to_pdf import extract_images
 from modules.pdf.pdf_merge import merge_pdfs
 from modules.pdf.pdf_split import split_all_pages, extract_pages_range, extract_pages_to_images
@@ -24,13 +26,12 @@ from modules.pdf.dragdrop import enable as enable_dragdrop, get_dropped_files as
 
 
 class PDFConverterUI:
-    """PDF 转换器 UI —— 可在任意 Page 中嵌入使用。"""
+    """PDF Converter UI — embeddable in any Flet Page."""
 
     def __init__(self, page: ft.Page, output_dir: str = None):
         self.page = page
         self.output_dir = output_dir or load_config()
 
-        # --- 状态变量 ---
         self.merge_files = []
         self.selected_indices = set()
         self.split_pdf_path = ""
@@ -43,20 +44,15 @@ class PDFConverterUI:
         self.watermark_img_path = ""
         self.wm_color_hex = "#FF0000"
 
-        # 字体
         self.system_fonts = get_system_fonts()
         self.system_font_names = [item[0] for item in self.system_fonts]
         self.system_font_paths = {item[0]: item[1] for item in self.system_fonts}
         self.system_font_families = {item[0]: item[2] for item in self.system_fonts}
 
-        # ZIP 上下文
         self.zip_ctx = {"zip_path": None, "base_name": None, "dlg": None, "pwd_field": None}
-
-        # 加密 / 解密路径
         self.protect_pdf_path = ""
         self.unlock_pdf_path = ""
 
-        # 脚本目录
         self._script_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         self.STARTUP_VBS = os.path.join(
             os.environ["APPDATA"],
@@ -64,11 +60,9 @@ class PDFConverterUI:
             "工具箱.vbs",
         )
 
-        # --- UI 控件引用 (在 build 中赋值) ---
         self.log_list = None
         self.dir_text = None
 
-    # ===================== 工具方法 =====================
     def add_log(self, message):
         if self.log_list is None:
             return
@@ -90,13 +84,13 @@ class PDFConverterUI:
         self.page.snack_bar.open = True
         self.page.update()
 
-    # ===================== FilePicker 回调 =====================
+    # ===================== FilePicker Callbacks =====================
     def _on_dir_pick(self, e: ft.FilePickerResultEvent):
         if e.path:
             self.output_dir = e.path
             self.dir_text.value = self.output_dir
-            save_config(self.output_dir)
-            self.add_log(f"输出目录已更改为: {self.output_dir}")
+            save_app_settings(output_dir=self.output_dir)
+            self.add_log(_("输出目录已更改为: {dir}", dir=self.output_dir))
 
     def _on_zip_pick(self, e: ft.FilePickerResultEvent):
         if not e.files:
@@ -116,28 +110,28 @@ class PDFConverterUI:
         if e.files:
             self.split_pdf_path = e.files[0].path
             self.split_label.value = os.path.basename(self.split_pdf_path)
-            self.add_log(f"已选择: {self.split_pdf_path}")
+            self.add_log(_("已选择: {path}", path=self.split_pdf_path))
             self.page.update()
 
     def _on_sign_pdf_pick(self, e: ft.FilePickerResultEvent):
         if e.files:
             self.sign_pdf_path = e.files[0].path
             self.sign_pdf_label.value = os.path.basename(self.sign_pdf_path)
-            self.add_log(f"已选择签名目标: {self.sign_pdf_path}")
+            self.add_log(_("已选择: {path}", path=self.sign_pdf_path))
             self.page.update()
 
     def _on_sign_img_pick(self, e: ft.FilePickerResultEvent):
         if e.files:
             self.sign_img_path = e.files[0].path
             self.sign_img_label.value = os.path.basename(self.sign_img_path)
-            self.add_log(f"已选择签名图片: {self.sign_img_path}")
+            self.add_log(_("已选择: {path}", path=self.sign_img_path))
             self.page.update()
 
     def _on_protect_pdf_pick(self, e: ft.FilePickerResultEvent):
         if e.files:
             self.protect_pdf_label.value = os.path.basename(e.files[0].path)
             self.protect_pdf_path = e.files[0].path
-            self.add_log(f"已选择: {e.files[0].path}")
+            self.add_log(_("已选择: {path}", path=e.files[0].path))
             self.page.update()
 
     def _on_unlock_pdf_pick(self, e: ft.FilePickerResultEvent):
@@ -145,21 +139,21 @@ class PDFConverterUI:
             path = e.files[0].path
             self.unlock_pdf_label.value = os.path.basename(path)
             self.unlock_pdf_path = path
-            self.add_log(f"已选择: {path}")
+            self.add_log(_("已选择: {path}", path=path))
             try:
                 enc, reader = is_encrypted(path)
                 if enc:
-                    self.unlock_status.value = "🔒 已加密"
+                    self.unlock_status.value = _("🔒 已加密")
                     self.unlock_status.color = ft.Colors.RED_600
                     self.unlock_pwd_field.visible = True
                     self.unlock_btn.disabled = False
                 else:
-                    self.unlock_status.value = "🔓 未加密"
+                    self.unlock_status.value = _("🔓 未加密")
                     self.unlock_status.color = ft.Colors.GREEN_700
                     self.unlock_pwd_field.visible = False
                     self.unlock_btn.disabled = False
             except Exception:
-                self.unlock_status.value = "⚠ 无法读取"
+                self.unlock_status.value = _("⚠ 无法读取")
                 self.unlock_status.color = ft.Colors.RED_600
             self.page.update()
 
@@ -184,7 +178,7 @@ class PDFConverterUI:
             self.watermark_img_label.value = os.path.basename(self.watermark_img_path)
             self.page.update()
 
-    # ===================== ZIP 转 PDF =====================
+    # ===================== ZIP to PDF =====================
     def _do_zip_convert(self, zip_path, base_name, password=None):
         try:
             images = extract_images(zip_path, password)
@@ -192,13 +186,13 @@ class PDFConverterUI:
             if 'password' in str(ex).lower():
                 self._show_password_dialog(zip_path, base_name)
                 return
-            self.add_log(f"❌ 错误: {ex}")
+            self.add_log(_("❌ 错误: {ex}", ex=ex))
             self.show_snack(str(ex), is_error=True)
             self.zip_progress.visible = False
             self.page.update()
             return
         except Exception as ex:
-            self.add_log(f"❌ 错误: {ex}")
+            self.add_log(_("❌ 错误: {ex}", ex=ex))
             self.show_snack(str(ex), is_error=True)
             self.zip_progress.visible = False
             self.page.update()
@@ -207,30 +201,30 @@ class PDFConverterUI:
         if images:
             pdf_path = os.path.join(self.output_dir, f"{base_name}.pdf")
             images[0].save(pdf_path, "PDF", resolution=100.0, save_all=True, append_images=images[1:])
-            self.add_log(f"✅ 成功! 保存至: {pdf_path}  ({len(images)} 张图片)")
-            self.show_snack("PDF 生成完毕！")
+            self.add_log(_("✅ 成功! 保存至: {path}  ({count} 张图片)", path=pdf_path, count=len(images)))
+            self.show_snack(_("PDF 生成完毕！"))
         else:
-            self.add_log("⚠️ ZIP 中未找到图片文件")
-            self.show_snack("ZIP 中未找到图片文件", is_error=True)
+            self.add_log(_("ZIP 中未找到图片文件"))
+            self.show_snack(_("ZIP 中未找到图片文件"), is_error=True)
         self.zip_progress.visible = False
         self.page.update()
 
     def _show_password_dialog(self, zip_path, base_name):
-        pwd_field = ft.TextField(label="密码", password=True, can_reveal_password=True, autofocus=True)
+        pwd_field = ft.TextField(label=_("密码"), password=True, can_reveal_password=True, autofocus=True)
         error_text = ft.Text("", color=ft.Colors.RED_600, size=12)
         self.zip_ctx["pwd_field"] = pwd_field
 
         def on_unlock(e):
             pwd = pwd_field.value
             if not pwd:
-                error_text.value = "请输入密码"
+                error_text.value = _("请输入密码")
                 self.page.update()
                 return
             try:
                 images = extract_images(zip_path, pwd)
             except RuntimeError as ex:
                 if 'password' in str(ex).lower():
-                    error_text.value = "密码错误，请重试"
+                    error_text.value = _("密码错误，请重试")
                     pwd_field.value = ""
                     self.page.update()
                     return
@@ -247,31 +241,31 @@ class PDFConverterUI:
             if images:
                 pdf_path = os.path.join(self.output_dir, f"{base_name}.pdf")
                 images[0].save(pdf_path, "PDF", resolution=100.0, save_all=True, append_images=images[1:])
-                self.add_log(f"✅ 成功! 保存至: {pdf_path}  ({len(images)} 张图片)")
-                self.show_snack("PDF 生成完毕！")
+                self.add_log(_("✅ 成功! 保存至: {path}  ({count} 张图片)", path=pdf_path, count=len(images)))
+                self.show_snack(_("PDF 生成完毕！"))
             else:
-                self.add_log("⚠️ ZIP 中未找到图片文件")
-                self.show_snack("ZIP 中未找到图片文件", is_error=True)
+                self.add_log(_("ZIP 中未找到图片文件"))
+                self.show_snack(_("ZIP 中未找到图片文件"), is_error=True)
             self.zip_progress.visible = False
             self.page.update()
 
         def on_cancel(e):
             self.page.close(self.zip_ctx["dlg"])
-            self.add_log("已取消密码输入")
+            self.add_log(_("已取消密码输入"))
             self.zip_progress.visible = False
             self.page.update()
 
         dlg = ft.AlertDialog(
-            title=ft.Text("需要密码"),
+            title=ft.Text(_("需要密码")),
             content=ft.Column([
-                ft.Text("ZIP 文件需要密码才能解压:"),
+                ft.Text(_("ZIP 文件需要密码才能解压:")),
                 ft.Text(base_name, weight=ft.FontWeight.BOLD),
                 pwd_field,
                 error_text,
             ], tight=True, spacing=10, width=300),
             actions=[
-                ft.TextButton("取消", on_click=on_cancel),
-                ft.FilledButton("解锁并转换", on_click=on_unlock),
+                ft.TextButton(_("取消"), on_click=on_cancel),
+                ft.FilledButton(_("解锁并转换"), on_click=on_unlock),
             ],
         )
         self.zip_ctx["dlg"] = dlg
@@ -279,7 +273,7 @@ class PDFConverterUI:
         self.zip_progress.visible = False
         self.page.update()
 
-    # ===================== 合并列表管理 =====================
+    # ===================== Merge List =====================
     def _rebuild_merge_list(self):
         self.merge_list.controls.clear()
         for i, fpath in enumerate(self.merge_files):
@@ -293,7 +287,7 @@ class PDFConverterUI:
                         trailing=ft.PopupMenuButton(
                             icon=ft.Icons.MORE_VERT,
                             items=[
-                                ft.PopupMenuItem(text="移除", icon=ft.Icons.DELETE_OUTLINE,
+                                ft.PopupMenuItem(text=_("移除"), icon=ft.Icons.DELETE_OUTLINE,
                                                  on_click=lambda _, idx=i: self._remove_one(idx)),
                             ],
                         ),
@@ -357,12 +351,12 @@ class PDFConverterUI:
         self.btn_up.disabled = not has_sel or (has_sel and min(self.selected_indices) == 0)
         self.btn_down.disabled = not has_sel or (has_sel and max(self.selected_indices) == len(self.merge_files) - 1)
         self.btn_merge.disabled = not has_files
-        self.merge_count.value = f" ({len(self.merge_files)} 个文件)" if has_files else ""
+        self.merge_count.value = _(" ({n} 个文件)", n=len(self.merge_files)) if has_files else ""
 
     def _do_merge(self):
         if not self.merge_files:
             return
-        name_field = ft.TextField(label="文件名", value="Merged", autofocus=True)
+        name_field = ft.TextField(label=_("文件名"), value="Merged", autofocus=True)
 
         def on_ok(e):
             name = name_field.value.strip()
@@ -372,71 +366,71 @@ class PDFConverterUI:
             out = os.path.join(self.output_dir, name)
             try:
                 result = merge_pdfs(self.merge_files, out)
-                self.add_log(f"✅ 合并完成: {result}  ({len(self.merge_files)} 个文件)")
-                self.show_snack("合并完成！")
+                self.add_log(_("✅ 合并完成: {path}  ({n} 个文件)", path=result, n=len(self.merge_files)))
+                self.show_snack(_("合并完成！"))
             except Exception as ex:
-                self.add_log(f"❌ 合并错误: {ex}")
+                self.add_log(_("❌ 合并错误: {ex}", ex=ex))
                 self.show_snack(str(ex), is_error=True)
 
         self._merge_dlg = ft.AlertDialog(
-            title=ft.Text("保存合并文件"),
+            title=ft.Text(_("保存合并文件")),
             content=ft.Column([
-                ft.Text("请输入合并后的文件名:"),
+                ft.Text(_("请输入合并后的文件名:")),
                 name_field,
             ], tight=True, width=300),
             actions=[
-                ft.TextButton("取消", on_click=lambda _: self.page.close(self._merge_dlg)),
-                ft.FilledButton("合并", on_click=on_ok),
+                ft.TextButton(_("取消"), on_click=lambda _: self.page.close(self._merge_dlg)),
+                ft.FilledButton(_("合并"), on_click=on_ok),
             ],
         )
         self.page.open(self._merge_dlg)
 
-    # ===================== 拆分 =====================
+    # ===================== Split =====================
     def _do_split(self):
         if not self.split_pdf_path:
-            self.show_snack("请先选择一个 PDF 文件", is_error=True)
+            self.show_snack(_("请先选择一个 PDF 文件"), is_error=True)
             return
         try:
             base = os.path.splitext(os.path.basename(self.split_pdf_path))[0]
             mode_val = self.split_mode.value
             if mode_val == "all":
                 d, count = split_all_pages(self.split_pdf_path, self.output_dir)
-                self.add_log(f"✅ 拆分完成: {d}  ({count} 页)")
-                self.show_snack(f"已拆分为 {count} 个单页 PDF")
+                self.add_log(_("✅ 拆分完成: {dir}  ({count} 页)", dir=d, count=count))
+                self.show_snack(_("已拆分为 {count} 个单页 PDF", count=count))
             elif mode_val == "png":
                 raw = self.split_page_entry.value.strip() or None
                 dpi_val = int(self.split_dpi_dd.value or 144)
                 scale = dpi_val / 72.0
                 d, count = extract_pages_to_images(self.split_pdf_path, self.output_dir, raw, scale)
-                self.add_log(f"✅ 导出完成: {d}  ({count} 张 PNG, {dpi_val} DPI)")
-                self.show_snack(f"已导出 {count} 张图片到 {os.path.basename(d)}")
+                self.add_log(_("✅ 导出完成: {dir}  ({count} 张 PNG, {dpi} DPI)", dir=d, count=count, dpi=dpi_val))
+                self.show_snack(_("已导出 {count} 张图片到 {dir}", count=count, dir=os.path.basename(d)))
                 os.startfile(d)
             else:
                 raw = self.split_page_entry.value.strip()
                 if not raw:
-                    self.show_snack("请输入页码范围", is_error=True)
+                    self.show_snack(_("请输入页码范围"), is_error=True)
                     return
                 out = os.path.join(self.output_dir, base + "_Extracted.pdf")
                 result, count = extract_pages_range(self.split_pdf_path, out, raw)
-                self.add_log(f"✅ 提取完成: {result}  ({count} 页)")
-                self.show_snack(f"已提取 {count} 页")
+                self.add_log(_("✅ 提取完成: {path}  ({count} 页)", path=result, count=count))
+                self.show_snack(_("已提取 {count} 页", count=count))
         except ValueError as ex:
-            self.add_log(f"❌ 拆分错误: {ex}")
+            self.add_log(_("❌ 拆分错误: {ex}", ex=ex))
             self.show_snack(str(ex), is_error=True)
         except RuntimeError as ex:
-            self.add_log(f"❌ 缺少依赖: {ex}")
+            self.add_log(_("❌ 缺少依赖: {ex}", ex=ex))
             self.show_snack(str(ex), is_error=True)
         except Exception as ex:
-            self.add_log(f"❌ 拆分错误: {ex}")
+            self.add_log(_("❌ 拆分错误: {ex}", ex=ex))
             self.show_snack(str(ex), is_error=True)
 
-    # ===================== 签名 =====================
+    # ===================== Sign =====================
     def _do_sign(self):
         if not self.sign_pdf_path:
-            self.show_snack("请先选择一个 PDF 文件", is_error=True)
+            self.show_snack(_("请先选择一个 PDF 文件"), is_error=True)
             return
         if not self.sign_img_path:
-            self.show_snack("请先选择一个签名图片", is_error=True)
+            self.show_snack(_("请先选择一个签名图片"), is_error=True)
             return
         try:
             base = os.path.splitext(os.path.basename(self.sign_pdf_path))[0]
@@ -448,70 +442,70 @@ class PDFConverterUI:
                 try:
                     pn = int(self.sign_page_num.value)
                     if pn < 1 or pn > total_pages:
-                        self.show_snack(f"页码超出范围 (1-{total_pages})", is_error=True)
+                        self.show_snack(_("页码超出范围 (1-{total})", total=total_pages), is_error=True)
                         return
                     target_pages = {pn}
                 except ValueError:
-                    self.show_snack("请输入有效页码", is_error=True)
+                    self.show_snack(_("请输入有效页码"), is_error=True)
                     return
             pos = self.sign_position.value
             scale = self.sign_scale_slider.value / 100.0
             out = os.path.join(self.output_dir, f"{base}_Signed.pdf")
             result, count = sign_pdf(self.sign_pdf_path, self.sign_img_path, out, pos, scale, target_pages)
-            self.add_log(f"✅ 签名完成: {result}  ({count} 页)")
-            self.show_snack(f"签名完成！已签署 {count} 页")
+            self.add_log(_("✅ 签名完成: {path}  ({count} 页)", path=result, count=count))
+            self.show_snack(_("签名完成！已签署 {count} 页", count=count))
         except Exception as ex:
-            self.add_log(f"❌ 签名错误: {ex}")
+            self.add_log(_("❌ 签名错误: {ex}", ex=ex))
             self.show_snack(str(ex), is_error=True)
 
-    # ===================== 加密 =====================
+    # ===================== Encrypt =====================
     def _do_protect(self):
         path = self.protect_pdf_path
         if not path:
-            self.show_snack("请先选择一个 PDF 文件", is_error=True)
+            self.show_snack(_("请先选择一个 PDF 文件"), is_error=True)
             return
         pwd = self.protect_pwd_field.value
         if not pwd:
-            self.show_snack("请输入密码", is_error=True)
+            self.show_snack(_("请输入密码"), is_error=True)
             return
         try:
             base = os.path.splitext(os.path.basename(path))[0]
             out = os.path.join(self.output_dir, f"{base}_Protected.pdf")
             owner_pwd = self.protect_owner_pwd_field.value or None
             result = encrypt_pdf(path, out, pwd, owner_pwd)
-            self.add_log(f"✅ 加密完成: {result}")
-            self.show_snack("PDF 加密完成！")
+            self.add_log(_("✅ 加密完成: {path}", path=result))
+            self.show_snack(_("PDF 加密完成！"))
         except Exception as ex:
-            self.add_log(f"❌ 加密错误: {ex}")
+            self.add_log(_("❌ 加密错误: {ex}", ex=ex))
             self.show_snack(str(ex), is_error=True)
 
-    # ===================== 解密 =====================
+    # ===================== Decrypt =====================
     def _do_unlock(self):
         path = self.unlock_pdf_path
         if not path:
-            self.show_snack("请先选择一个 PDF 文件", is_error=True)
+            self.show_snack(_("请先选择一个 PDF 文件"), is_error=True)
             return
         try:
             enc, reader = is_encrypted(path)
             pwd = self.unlock_pwd_field.value if enc else None
             if enc and not pwd:
-                self.show_snack("请输入密码", is_error=True)
+                self.show_snack(_("请输入密码"), is_error=True)
                 return
             base = os.path.splitext(os.path.basename(path))[0]
             out = os.path.join(self.output_dir, f"{base}_Unlocked.pdf")
             result = decrypt_pdf(path, out, pwd)
             if result is None:
-                self.show_snack("密码错误", is_error=True)
+                self.show_snack(_("密码错误"), is_error=True)
                 return
-            self.add_log(f"✅ 解密完成: {result}")
-            self.show_snack("PDF 解密完成！")
+            self.add_log(_("✅ 解密完成: {path}", path=result))
+            self.show_snack(_("PDF 解密完成！"))
         except ValueError as ex:
             self.show_snack(str(ex), is_error=True)
         except Exception as ex:
-            self.add_log(f"❌ 解密错误: {ex}")
+            self.add_log(_("❌ 解密错误: {ex}", ex=ex))
             self.show_snack(str(ex), is_error=True)
 
-    # ===================== 旋转 =====================
+    # ===================== Rotate =====================
     def _rebuild_rotate_list(self):
         self.rotate_list.controls.clear()
         for i, fpath in enumerate(self.rotate_files):
@@ -538,7 +532,7 @@ class PDFConverterUI:
 
     def _update_rotate_ui(self):
         n = len(self.rotate_files)
-        self.rotate_count.value = f" ({n} 个文件)" if n else ""
+        self.rotate_count.value = _(" ({n} 个文件)", n=n) if n else ""
         self.rotate_page_mode.visible = (n == 1)
         self.rotate_page_entry.visible = (n == 1 and self.rotate_page_mode.value == "range")
         self.rotate_btn.disabled = (n == 0)
@@ -549,7 +543,7 @@ class PDFConverterUI:
 
     def _do_rotate(self):
         if not self.rotate_files:
-            self.show_snack("请先添加 PDF 文件", is_error=True)
+            self.show_snack(_("请先添加 PDF 文件"), is_error=True)
             return
         angle_map = {"90cw": 90, "90ccw": -90, "180": 180}
         angle = angle_map.get(self.rotate_angle_dd.value, 90)
@@ -562,19 +556,19 @@ class PDFConverterUI:
                 if len(self.rotate_files) == 1 and self.rotate_page_mode.value == "range":
                     pages = parse_page_range(self.rotate_page_entry.value, total)
                     if pages is None:
-                        self.show_snack("无效的页码范围", is_error=True)
+                        self.show_snack(_("无效的页码范围"), is_error=True)
                         return
                 else:
                     pages = set(range(1, total + 1))
                 out = os.path.join(self.output_dir, f"{base}_Rotated_{angle_label}.pdf")
                 result, count = rotate_pdf(fpath, out, angle, pages)
-                self.add_log(f"✅ 旋转完成: {result}  ({count} 页)")
-            self.show_snack(f"旋转完成！{len(self.rotate_files)} 个文件")
+                self.add_log(_("✅ 旋转完成: {path}  ({count} 页)", path=result, count=count))
+            self.show_snack(_("旋转完成！{n} 个文件", n=len(self.rotate_files)))
         except Exception as ex:
-            self.add_log(f"❌ 旋转错误: {ex}")
+            self.add_log(_("❌ 旋转错误: {ex}", ex=ex))
             self.show_snack(str(ex), is_error=True)
 
-    # ===================== 裁剪 =====================
+    # ===================== Crop =====================
     def _rebuild_crop_list(self):
         self.crop_list.controls.clear()
         for i, fpath in enumerate(self.crop_files):
@@ -601,7 +595,7 @@ class PDFConverterUI:
 
     def _update_crop_ui(self):
         n = len(self.crop_files)
-        self.crop_count.value = f" ({n} 个文件)" if n else ""
+        self.crop_count.value = _(" ({n} 个文件)", n=n) if n else ""
         self.crop_page_mode.visible = (n == 1)
         self.crop_page_entry.visible = (n == 1 and self.crop_page_mode.value == "range")
         self.crop_btn.disabled = (n == 0)
@@ -612,7 +606,7 @@ class PDFConverterUI:
 
     def _do_crop(self):
         if not self.crop_files:
-            self.show_snack("请先添加 PDF 文件", is_error=True)
+            self.show_snack(_("请先添加 PDF 文件"), is_error=True)
             return
         try:
             mt = float(self.crop_top.value or 0)
@@ -620,7 +614,7 @@ class PDFConverterUI:
             ml = float(self.crop_left.value or 0)
             mr = float(self.crop_right.value or 0)
         except ValueError:
-            self.show_snack("边距必须为数字", is_error=True)
+            self.show_snack(_("边距必须为数字"), is_error=True)
             return
         try:
             for fpath in self.crop_files:
@@ -630,22 +624,22 @@ class PDFConverterUI:
                 if len(self.crop_files) == 1 and self.crop_page_mode.value == "range":
                     pages = parse_page_range(self.crop_page_entry.value, total)
                     if pages is None:
-                        self.show_snack("无效的页码范围", is_error=True)
+                        self.show_snack(_("无效的页码范围"), is_error=True)
                         return
                 else:
                     pages = set(range(1, total + 1))
                 out = os.path.join(self.output_dir, f"{base}_Cropped.pdf")
                 result, count = crop_pdf(fpath, out, (mt, mb, ml, mr), pages)
-                self.add_log(f"✅ 裁剪完成: {result}  ({count} 页)")
-            self.show_snack(f"裁剪完成！{len(self.crop_files)} 个文件")
+                self.add_log(_("✅ 裁剪完成: {path}  ({count} 页)", path=result, count=count))
+            self.show_snack(_("裁剪完成！{n} 个文件", n=len(self.crop_files)))
         except ValueError as ex:
-            self.add_log(f"❌ 裁剪错误: {ex}")
+            self.add_log(_("❌ 裁剪错误: {ex}", ex=ex))
             self.show_snack(str(ex), is_error=True)
         except Exception as ex:
-            self.add_log(f"❌ 裁剪错误: {ex}")
+            self.add_log(_("❌ 裁剪错误: {ex}", ex=ex))
             self.show_snack(str(ex), is_error=True)
 
-    # ===================== 水印 =====================
+    # ===================== Watermark =====================
     def _rebuild_watermark_list(self):
         self.watermark_list.controls.clear()
         for i, fpath in enumerate(self.watermark_files):
@@ -671,7 +665,7 @@ class PDFConverterUI:
 
     def _collect_wm_settings(self):
         font_name = (self.wm_font_display.value or "").strip()
-        if not font_name or font_name == "(无字体)":
+        if not font_name or font_name == _("(无字体)"):
             font_name = self.system_font_names[0] if self.system_font_names else ""
         return {
             "type": self.wm_type.value,
@@ -723,21 +717,21 @@ class PDFConverterUI:
     def _save_current_preset(self):
         name = self.wm_preset_name.value.strip()
         if not name:
-            self.show_snack("请输入预设名称", is_error=True)
+            self.show_snack(_("请输入预设名称"), is_error=True)
             return
         self.watermark_presets[name] = self._collect_wm_settings()
         save_presets(self.watermark_presets)
         self._rebuild_preset_dropdown()
-        self.add_log(f"预设已保存: {name}")
-        self.show_snack(f"预设「{name}」已保存")
+        self.add_log(_("预设已保存: {name}", name=name))
+        self.show_snack(_("预设「{name}」已保存", name=name))
 
     def _load_selected_preset(self):
         name = self.wm_preset_dd.value
         if not name or name not in self.watermark_presets:
             return
         self._apply_wm_settings(self.watermark_presets[name])
-        self.add_log(f"预设已加载: {name}")
-        self.show_snack(f"预设「{name}」已加载")
+        self.add_log(_("预设已加载: {name}", name=name))
+        self.show_snack(_("预设「{name}」已加载", name=name))
 
     def _delete_selected_preset(self):
         name = self.wm_preset_dd.value
@@ -746,8 +740,8 @@ class PDFConverterUI:
         del self.watermark_presets[name]
         save_presets(self.watermark_presets)
         self._rebuild_preset_dropdown()
-        self.add_log(f"预设已删除: {name}")
-        self.show_snack(f"预设「{name}」已删除")
+        self.add_log(_("预设已删除: {name}", name=name))
+        self.show_snack(_("预设「{name}」已删除", name=name))
 
     def _rebuild_preset_dropdown(self):
         self.wm_preset_dd.options = [ft.dropdown.Option(k, k) for k in sorted(self.watermark_presets.keys())]
@@ -769,45 +763,45 @@ class PDFConverterUI:
 
     def _do_watermark_preview(self):
         if not self.watermark_files:
-            self.show_snack("请先添加 PDF 文件", is_error=True)
+            self.show_snack(_("请先添加 PDF 文件"), is_error=True)
             return
         try:
             preview_path = os.path.join(self.output_dir, "_watermark_preview.pdf")
             preview_watermark(self.watermark_files[0], preview_path, self._collect_wm_settings())
-            self.add_log(f"预览已生成: {preview_path}")
-            self.show_snack("正在打开预览...")
+            self.add_log(_("预览已生成: {path}", path=preview_path))
+            self.show_snack(_("正在打开预览..."))
             os.startfile(preview_path)
         except ValueError as ex:
             self.show_snack(str(ex), is_error=True)
         except Exception as ex:
-            self.add_log(f"❌ 预览错误: {ex}")
+            self.add_log(_("❌ 预览错误: {ex}", ex=ex))
             self.show_snack(str(ex), is_error=True)
 
     def _do_watermark_apply(self):
         if not self.watermark_files:
-            self.show_snack("请先添加 PDF 文件", is_error=True)
+            self.show_snack(_("请先添加 PDF 文件"), is_error=True)
             return
         params = self._collect_wm_settings()
         if params["type"] == "text" and not params["text"]:
-            self.show_snack("请输入水印文本", is_error=True)
+            self.show_snack(_("请输入水印文本"), is_error=True)
             return
         if params["type"] != "text" and not params["img_path"]:
-            self.show_snack("请选择水印图片", is_error=True)
+            self.show_snack(_("请选择水印图片"), is_error=True)
             return
         try:
             for fpath in self.watermark_files:
                 base = os.path.splitext(os.path.basename(fpath))[0]
                 out = os.path.join(self.output_dir, f"{base}_Watermarked.pdf")
                 result, count = apply_watermark_to_pdf(fpath, out, params)
-                self.add_log(f"✅ 水印完成: {result}  ({count} 页)")
-            self.show_snack(f"水印添加完成！{len(self.watermark_files)} 个文件")
+                self.add_log(_("✅ 水印完成: {path}  ({count} 页)", path=result, count=count))
+            self.show_snack(_("水印添加完成！{n} 个文件", n=len(self.watermark_files)))
         except ValueError as ex:
             self.show_snack(str(ex), is_error=True)
         except Exception as ex:
-            self.add_log(f"❌ 水印错误: {ex}")
+            self.add_log(_("❌ 水印错误: {ex}", ex=ex))
             self.show_snack(str(ex), is_error=True)
 
-    # ===================== 设置 =====================
+    # ===================== Settings =====================
     def _is_startup_enabled(self):
         return os.path.exists(self.STARTUP_VBS)
 
@@ -829,71 +823,26 @@ class PDFConverterUI:
             except Exception:
                 return False
 
-    def _show_settings(self, _):
-        top_switch = ft.Switch(value=self.page.window.always_on_top)
-        startup_switch = ft.Switch(value=self._is_startup_enabled())
-
-        def on_top_change(e):
-            self.page.window.always_on_top = top_switch.value
+    def _show_settings(self, _e):
+        def on_close():
             self.page.update()
 
-        def on_startup_change(e):
-            ok = self._set_startup(startup_switch.value)
+        def on_startup_handler(enabled):
+            ok = self._set_startup(enabled)
             if not ok:
-                startup_switch.value = self._is_startup_enabled()
-                self.show_snack("开机自启设置失败，请检查权限", is_error=True)
-            self.page.update()
+                self.show_snack(_("开机自启设置失败，请检查权限"), is_error=True)
+            return ok
 
-        top_switch.on_change = on_top_change
-        startup_switch.on_change = on_startup_change
-
-        dlg = ft.AlertDialog(
-            title=ft.Row([
-                ft.Icon(ft.Icons.SETTINGS, size=20),
-                ft.Text("设置", size=18, weight=ft.FontWeight.W_500),
-            ]),
-            content=ft.Column([
-                ft.Container(
-                    content=ft.Row([
-                        ft.Column([
-                            ft.Text("窗口置顶", weight=ft.FontWeight.W_500, size=14),
-                            ft.Text("保持窗口始终在其他窗口之上", size=12, color=ft.Colors.GREY_600),
-                        ], expand=True),
-                        top_switch,
-                    ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                    padding=ft.padding.symmetric(vertical=8),
-                ),
-                ft.Divider(height=1),
-                ft.Container(
-                    content=ft.Row([
-                        ft.Column([
-                            ft.Text("开机自启动", weight=ft.FontWeight.W_500, size=14),
-                            ft.Text("系统启动时自动运行本程序", size=12, color=ft.Colors.GREY_600),
-                        ], expand=True),
-                        startup_switch,
-                    ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                    padding=ft.padding.symmetric(vertical=8),
-                ),
-                ft.Divider(height=1),
-                ft.Container(
-                    content=ft.Row([
-                        ft.Column([
-                            ft.Text("拖放导入", weight=ft.FontWeight.W_500, size=14),
-                            ft.Text("将 PDF / ZIP 文件直接拖入窗口即可导入", size=12,
-                                    color=ft.Colors.GREY_600),
-                        ], expand=True),
-                        ft.Icon(ft.Icons.CHECK_CIRCLE_OUTLINE, color=ft.Colors.GREEN_600, size=20),
-                    ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                    padding=ft.padding.symmetric(vertical=8),
-                ),
-            ], spacing=0, width=360),
-            actions=[
-                ft.TextButton("关闭", on_click=lambda _: self.page.close(dlg)),
-            ],
+        rebuild = getattr(self.page, '_on_rebuild_ui', None)
+        build_settings_dialog(
+            self.page, on_close=on_close,
+            show_startup=True,
+            on_startup_change=on_startup_handler,
+            is_startup_enabled=self._is_startup_enabled(),
+            on_language_changed=rebuild,
         )
-        self.page.open(dlg)
 
-    # ===================== 拖放处理 =====================
+    # ===================== Drag & Drop =====================
     def _handle_dropped_files(self, files):
         if not files:
             return
@@ -911,7 +860,7 @@ class PDFConverterUI:
             self.page.update()
             self._do_zip_convert(zip_path, base)
             self.tabs.selected_index = 0
-            self.add_log(f"📥 拖放导入 ZIP: {os.path.basename(zip_path)}")
+            self.add_log(_("📥 拖放导入 ZIP: {name}", name=os.path.basename(zip_path)))
         elif pdfs:
             tab_idx = self.tabs.selected_index
             if tab_idx == 1:
@@ -938,19 +887,19 @@ class PDFConverterUI:
                 self.unlock_pdf_label.value = os.path.basename(path)
                 try:
                     enc, _ = is_encrypted(path)
-                    self.unlock_status.value = "🔒 已加密" if enc else "🔓 未加密"
+                    self.unlock_status.value = _("🔒 已加密") if enc else _("🔓 未加密")
                     self.unlock_status.color = ft.Colors.RED_600 if enc else ft.Colors.GREEN_700
                     self.unlock_pwd_field.visible = enc
                     self.unlock_btn.disabled = False
                 except Exception:
                     pass
-            self.add_log(f"📥 拖放导入 {len(pdfs)} 个 PDF 文件")
-            self.show_snack(f"已导入 {len(pdfs)} 个 PDF 文件")
+            self.add_log(_("📥 拖放导入 {n} 个 PDF 文件", n=len(pdfs)))
+            self.show_snack(_("已导入 {n} 个 PDF 文件", n=len(pdfs)))
         elif imgs:
-            self.add_log(f"📥 拖放导入 {len(imgs)} 张图片（请先打包为 ZIP 再转换）")
-            self.show_snack("图片文件请打包为 ZIP 后再拖入", is_error=True)
+            self.add_log(_("📥 拖放导入 {n} 张图片（请先打包为 ZIP 再转换）", n=len(imgs)))
+            self.show_snack(_("图片文件请打包为 ZIP 后再拖入"), is_error=True)
         if others:
-            self.add_log(f"⚠ 忽略 {len(others)} 个不支持的文件类型")
+            self.add_log(_("⚠ 忽略 {n} 个不支持的文件类型", n=len(others)))
         self.page.update()
 
     async def _poll_drops(self):
@@ -960,13 +909,13 @@ class PDFConverterUI:
                 self._handle_dropped_files(files)
             await asyncio.sleep(0.3)
 
-    # ===================== 字体选择 =====================
+    # ===================== Font Selection =====================
     def _select_font(self, name):
         self.wm_font_display.value = name
         self.page.update()
 
-    def _show_font_picker(self, _):
-        search = ft.TextField(label="搜索字体", autofocus=True, width=360)
+    def _show_font_picker(self, _e):
+        search = ft.TextField(label=_("搜索字体"), autofocus=True, width=360)
         font_list = ft.ListView(expand=True, spacing=0)
 
         def _rebuild_font_list():
@@ -996,14 +945,14 @@ class PDFConverterUI:
 
         _rebuild_font_list()
         font_dlg = ft.AlertDialog(
-            title=ft.Text("选择字体"),
+            title=ft.Text(_("选择字体")),
             content=ft.Column([search, ft.Divider(height=4), font_list],
                               height=520, width=380, spacing=4),
-            actions=[ft.TextButton("取消", on_click=lambda _: self.page.close(font_dlg))],
+            actions=[ft.TextButton(_("取消"), on_click=lambda _: self.page.close(font_dlg))],
         )
         self.page.open(font_dlg)
 
-    # ===================== 颜色选择 =====================
+    # ===================== Color Selection =====================
     def _on_hex_change(self, val):
         val = val.strip()
         if val.startswith('#'):
@@ -1024,7 +973,7 @@ class PDFConverterUI:
                     width=32, height=32,
                     bgcolor=hex_,
                     border_radius=4,
-                    tooltip=name,
+                    tooltip=_(name),
                     on_click=lambda _, h=hex_: _on_color_picked(h),
                     border=ft.border.all(2, ft.Colors.WHITE) if hex_ == self.wm_color_hex else None,
                     shadow=ft.BoxShadow(blur_radius=1, color=ft.Colors.GREY_400) if hex_ == self.wm_color_hex else None,
@@ -1044,10 +993,10 @@ class PDFConverterUI:
             color_rows.append(ft.Row(grid_items[i:i+cols], spacing=4))
 
         color_dlg = ft.AlertDialog(
-            title=ft.Text("选择颜色"),
+            title=ft.Text(_("选择颜色")),
             content=ft.Column([
                 ft.Row([
-                    ft.Text("当前:", size=13),
+                    ft.Text(_("当前:"), size=13),
                     ft.Container(width=24, height=24, bgcolor=self.wm_color_hex, border_radius=4,
                                  border=ft.border.all(1, ft.Colors.OUTLINE)),
                     ft.Text(self.wm_color_hex, size=13, weight=ft.FontWeight.W_500),
@@ -1055,16 +1004,15 @@ class PDFConverterUI:
                 ft.Divider(height=8),
                 ft.Column(color_rows, spacing=4, scroll=ft.ScrollMode.AUTO, height=280),
             ], spacing=8, width=420),
-            actions=[ft.TextButton("取消", on_click=lambda _: self.page.close(color_dlg))],
+            actions=[ft.TextButton(_("取消"), on_click=lambda _: self.page.close(color_dlg))],
         )
         self.page.open(color_dlg)
 
-    # ===================== UI 构建 =====================
+    # ===================== Build UI =====================
     def build(self):
-        """构建完整的 PDF 工具箱 UI，返回 (top_bar, tabs, log_panel) 三元组。"""
         page = self.page
 
-        # --- FilePicker 实例 ---
+        # --- FilePickers ---
         dir_picker = ft.FilePicker(on_result=self._on_dir_pick)
         zip_picker = ft.FilePicker(on_result=self._on_zip_pick)
         multi_picker = ft.FilePicker(on_result=self._on_multi_pdf_pick)
@@ -1082,29 +1030,27 @@ class PDFConverterUI:
                              sign_pdf_picker, sign_img_picker, protect_pdf_picker, unlock_pdf_picker,
                              rotate_picker, crop_picker, watermark_pdf_picker, watermark_img_picker])
 
-        # --- 日志 ---
+        # --- Log ---
         self.log_list = ft.ListView(expand=True, auto_scroll=True, spacing=2)
 
-        # --- 顶部栏 ---
+        # --- Top Bar ---
         self.dir_text = ft.Text(self.output_dir, color=ft.Colors.BLUE_700, size=13, italic=True,
                                 max_lines=1, overflow=ft.TextOverflow.ELLIPSIS)
 
         top_bar = ft.Container(
             content=ft.Row([
                 ft.Icon(ft.Icons.FOLDER_OPEN, color=ft.Colors.BLUE_600),
-                ft.Text("保存至:", weight=ft.FontWeight.W_500),
+                ft.Text(_("保存至:"), weight=ft.FontWeight.W_500),
                 ft.TextButton(
-                    "更改目录",
+                    _("更改目录"),
                     icon=ft.Icons.EDIT_LOCATION_OUTLINED,
-                    on_click=lambda _: dir_picker.get_directory_path(dialog_title="选择文件保存目录"),
+                    on_click=lambda _: dir_picker.get_directory_path(dialog_title=_("选择文件保存目录")),
                 ),
                 self.dir_text,
                 ft.Container(expand=True),
                 ft.IconButton(
-                    icon=ft.Icons.SETTINGS,
-                    icon_size=20,
-                    tooltip="设置",
-                    icon_color=ft.Colors.GREY_600,
+                    icon=ft.Icons.SETTINGS, icon_size=20,
+                    tooltip=_("设置"), icon_color=ft.Colors.GREY_600,
                     on_click=self._show_settings,
                 ),
             ], spacing=8, alignment=ft.MainAxisAlignment.CENTER),
@@ -1113,21 +1059,21 @@ class PDFConverterUI:
             border=ft.border.only(bottom=ft.border.BorderSide(1, ft.Colors.OUTLINE_VARIANT)),
         )
 
-        # ========== 子标签页构建 ==========
-        # --- 标签页 1: ZIP 转 PDF ---
+        # ========== Sub-Tab Pages ==========
+        # --- Tab 1: ZIP to PDF ---
         self.zip_progress = ft.ProgressRing(visible=False, width=32, height=32)
         zip_tab_content = ft.Container(
             content=ft.Column([
-                ft.Text("将 ZIP 压缩包中的图片转换为 PDF", size=15, weight=ft.FontWeight.W_500),
-                ft.Text("支持格式: PNG, JPG, JPEG, BMP, TIFF, WebP, GIF, JFIF", size=12, color=ft.Colors.GREY_600),
+                ft.Text(_("将 ZIP 压缩包中的图片转换为 PDF"), size=15, weight=ft.FontWeight.W_500),
+                ft.Text(_("支持格式: PNG, JPG, JPEG, BMP, TIFF, WebP, GIF, JFIF"), size=12, color=ft.Colors.GREY_600),
                 ft.Divider(height=20),
                 ft.Container(
                     content=ft.Column([
                         ft.FilledButton(
-                            "选择 ZIP 并转换",
+                            _("选择 ZIP 并转换"),
                             icon=ft.Icons.ARCHIVE_OUTLINED,
                             on_click=lambda _: zip_picker.pick_files(
-                                dialog_title="选择 ZIP 文件",
+                                dialog_title=_("选择 ZIP 文件"),
                                 allowed_extensions=["zip"],
                                 allow_multiple=False,
                                 file_type=ft.FilePickerFileType.CUSTOM,
@@ -1144,24 +1090,24 @@ class PDFConverterUI:
             padding=ft.padding.all(24), expand=True,
         )
 
-        # --- 标签页 2: 合并 PDF ---
+        # --- Tab 2: Merge PDF ---
         self.merge_count = ft.Text("", size=12, color=ft.Colors.GREY_600)
         self.merge_list = ft.ListView(expand=True, spacing=2)
 
-        self.btn_remove = ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, tooltip="移除选中", disabled=True,
+        self.btn_remove = ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, tooltip=_("移除选中"), disabled=True,
                                         on_click=lambda _: self._remove_selected())
-        self.btn_up = ft.IconButton(icon=ft.Icons.ARROW_UPWARD, tooltip="上移", disabled=True,
+        self.btn_up = ft.IconButton(icon=ft.Icons.ARROW_UPWARD, tooltip=_("上移"), disabled=True,
                                     on_click=lambda _: self._move_up())
-        self.btn_down = ft.IconButton(icon=ft.Icons.ARROW_DOWNWARD, tooltip="下移", disabled=True,
+        self.btn_down = ft.IconButton(icon=ft.Icons.ARROW_DOWNWARD, tooltip=_("下移"), disabled=True,
                                       on_click=lambda _: self._move_down())
-        self.btn_merge = ft.FilledButton("合并", icon=ft.Icons.MERGE_TYPE, disabled=True,
+        self.btn_merge = ft.FilledButton(_("合并"), icon=ft.Icons.MERGE_TYPE, disabled=True,
                                          on_click=lambda _: self._do_merge())
 
         merge_tab_content = ft.Container(
             content=ft.Row([
                 ft.Container(
                     content=ft.Column([
-                        ft.Row([ft.Text("待合并列表", size=15, weight=ft.FontWeight.W_500), self.merge_count]),
+                        ft.Row([ft.Text(_("待合并列表"), size=15, weight=ft.FontWeight.W_500), self.merge_count]),
                         ft.Divider(height=4), self.merge_list,
                     ], expand=True),
                     expand=True, border_radius=12,
@@ -1170,9 +1116,9 @@ class PDFConverterUI:
                 ),
                 ft.Container(
                     content=ft.Column([
-                        ft.IconButton(icon=ft.Icons.ADD, tooltip="添加 PDF 文件", icon_color=ft.Colors.BLUE_600,
+                        ft.IconButton(icon=ft.Icons.ADD, tooltip=_("添加 PDF 文件"), icon_color=ft.Colors.BLUE_600,
                                       on_click=lambda _: multi_picker.pick_files(
-                                          dialog_title="选择要合并的 PDF 文件", allowed_extensions=["pdf"],
+                                          dialog_title=_("选择要合并的 PDF 文件"), allowed_extensions=["pdf"],
                                           allow_multiple=True, file_type=ft.FilePickerFileType.CUSTOM)),
                         ft.Divider(height=4),
                         self.btn_up, self.btn_down, ft.Divider(height=4),
@@ -1185,46 +1131,46 @@ class PDFConverterUI:
             padding=ft.padding.all(24), expand=True,
         )
 
-        # --- 标签页 3: 拆分/提取 PDF ---
+        # --- Tab 3: Split/Extract PDF ---
         self.split_mode = ft.RadioGroup(
             value="all",
             content=ft.Column([
-                ft.Radio(value="all", label="拆分为单页 PDF"),
-                ft.Radio(value="range", label="提取指定页码为 PDF"),
-                ft.Radio(value="png", label="导出页面为 PNG 图片"),
+                ft.Radio(value="all", label=_("拆分为单页 PDF")),
+                ft.Radio(value="range", label=_("提取指定页码为 PDF")),
+                ft.Radio(value="png", label=_("导出页面为 PNG 图片")),
             ], spacing=8),
         )
-        self.split_label = ft.Text("未选择文件", size=12, color=ft.Colors.GREY_600)
-        self.split_page_entry = ft.TextField(label="页码范围", hint_text="例如: 1,3,5-10", visible=False, width=260)
+        self.split_label = ft.Text(_("未选择文件"), size=12, color=ft.Colors.GREY_600)
+        self.split_page_entry = ft.TextField(label=_("页码范围"), hint_text=_("例如: 1,3,5-10"), visible=False, width=260)
         self.split_dpi_dd = ft.Dropdown(
-            label="分辨率", value="144", width=120, visible=False,
+            label=_("分辨率"), value="144", width=120, visible=False,
             options=[
                 ft.dropdown.Option("72", "72 DPI"), ft.dropdown.Option("96", "96 DPI"),
                 ft.dropdown.Option("144", "144 DPI"), ft.dropdown.Option("200", "200 DPI"),
                 ft.dropdown.Option("300", "300 DPI"),
             ],
         )
-        split_exec_btn = ft.FilledButton("执行拆分", icon=ft.Icons.CALL_SPLIT, on_click=lambda _: self._do_split())
+        split_exec_btn = ft.FilledButton(_("执行拆分"), icon=ft.Icons.CALL_SPLIT, on_click=lambda _: self._do_split())
 
         def on_split_mode_changed(e):
             mode = self.split_mode.value
             self.split_page_entry.visible = mode in ("range", "png")
             self.split_dpi_dd.visible = (mode == "png")
-            split_exec_btn.text = "导出 PNG" if mode == "png" else "执行拆分"
+            split_exec_btn.text = _("导出 PNG") if mode == "png" else _("执行拆分")
             split_exec_btn.icon = ft.Icons.IMAGE_OUTLINED if mode == "png" else ft.Icons.CALL_SPLIT
             page.update()
         self.split_mode.on_change = on_split_mode_changed
 
         split_tab_content = ft.Container(
             content=ft.Column([
-                ft.Text("拆分或提取 PDF 页面", size=15, weight=ft.FontWeight.W_500),
+                ft.Text(_("拆分或提取 PDF 页面"), size=15, weight=ft.FontWeight.W_500),
                 ft.Divider(height=12),
                 ft.Container(
                     content=ft.Column([
                         ft.Row([
-                            ft.OutlinedButton("浏览 PDF", icon=ft.Icons.FILE_OPEN,
+                            ft.OutlinedButton(_("浏览 PDF"), icon=ft.Icons.FILE_OPEN,
                                 on_click=lambda _: single_picker.pick_files(
-                                    dialog_title="选择 PDF 文件", allowed_extensions=["pdf"],
+                                    dialog_title=_("选择 PDF 文件"), allowed_extensions=["pdf"],
                                     allow_multiple=False, file_type=ft.FilePickerFileType.CUSTOM)),
                             self.split_label,
                         ], spacing=12),
@@ -1242,14 +1188,14 @@ class PDFConverterUI:
             padding=ft.padding.all(24), expand=True,
         )
 
-        # --- 标签页 4: 签名 PDF ---
-        self.sign_pdf_label = ft.Text("未选择文件", size=12, color=ft.Colors.GREY_600)
-        self.sign_img_label = ft.Text("未选择图片", size=12, color=ft.Colors.GREY_600)
+        # --- Tab 4: Sign PDF ---
+        self.sign_pdf_label = ft.Text(_("未选择文件"), size=12, color=ft.Colors.GREY_600)
+        self.sign_img_label = ft.Text(_("未选择图片"), size=12, color=ft.Colors.GREY_600)
         self.sign_page_mode = ft.RadioGroup(
             value="all",
-            content=ft.Row([ft.Radio(value="all", label="所有页"), ft.Radio(value="single", label="指定页")], spacing=16),
+            content=ft.Row([ft.Radio(value="all", label=_("所有页")), ft.Radio(value="single", label=_("指定页"))], spacing=16),
         )
-        self.sign_page_num = ft.TextField(label="页码", value="1", width=80, visible=False)
+        self.sign_page_num = ft.TextField(label=_("页码"), value="1", width=80, visible=False)
 
         def on_sign_page_mode_changed(e):
             self.sign_page_num.visible = self.sign_page_mode.value == "single"
@@ -1257,11 +1203,11 @@ class PDFConverterUI:
         self.sign_page_mode.on_change = on_sign_page_mode_changed
 
         self.sign_position = ft.Dropdown(
-            label="签名位置", value="bottom-right", width=200,
+            label=_("签名位置"), value="bottom-right", width=200,
             options=[
-                ft.dropdown.Option("bottom-right", "右下角"), ft.dropdown.Option("bottom-left", "左下角"),
-                ft.dropdown.Option("top-right", "右上角"), ft.dropdown.Option("top-left", "左上角"),
-                ft.dropdown.Option("center", "居中"),
+                ft.dropdown.Option("bottom-right", _("右下角")), ft.dropdown.Option("bottom-left", _("左下角")),
+                ft.dropdown.Option("top-right", _("右上角")), ft.dropdown.Option("top-left", _("左上角")),
+                ft.dropdown.Option("center", _("居中")),
             ],
         )
         self.sign_scale_slider = ft.Slider(min=10, max=100, value=30, divisions=9, label="{value}%", width=220)
@@ -1274,38 +1220,38 @@ class PDFConverterUI:
 
         sign_tab_content = ft.Container(
             content=ft.Column([
-                ft.Text("为 PDF 添加签名图片", size=15, weight=ft.FontWeight.W_500),
+                ft.Text(_("为 PDF 添加签名图片"), size=15, weight=ft.FontWeight.W_500),
                 ft.Divider(height=12),
                 ft.Container(
                     content=ft.Column([
                         ft.Row([
-                            ft.OutlinedButton("选择 PDF", icon=ft.Icons.FILE_OPEN,
+                            ft.OutlinedButton(_("选择 PDF"), icon=ft.Icons.FILE_OPEN,
                                 on_click=lambda _: sign_pdf_picker.pick_files(
-                                    dialog_title="选择要签名的 PDF", allowed_extensions=["pdf"],
+                                    dialog_title=_("选择要签名的 PDF"), allowed_extensions=["pdf"],
                                     allow_multiple=False, file_type=ft.FilePickerFileType.CUSTOM)),
                             self.sign_pdf_label,
                         ], spacing=12),
                         ft.Row([
-                            ft.OutlinedButton("选择签名图片", icon=ft.Icons.IMAGE_OUTLINED,
+                            ft.OutlinedButton(_("选择签名图片"), icon=ft.Icons.IMAGE_OUTLINED,
                                 on_click=lambda _: sign_img_picker.pick_files(
-                                    dialog_title="选择签名图片", allowed_extensions=["png", "jpg", "jpeg"],
+                                    dialog_title=_("选择签名图片"), allowed_extensions=["png", "jpg", "jpeg"],
                                     allow_multiple=False, file_type=ft.FilePickerFileType.CUSTOM)),
                             self.sign_img_label,
                         ], spacing=12),
                         ft.Divider(height=8),
-                        ft.Text("签名页面:", weight=ft.FontWeight.W_500, size=13),
+                        ft.Text(_("签名页面:"), weight=ft.FontWeight.W_500, size=13),
                         ft.Row([self.sign_page_mode, self.sign_page_num], spacing=12,
                                vertical_alignment=ft.CrossAxisAlignment.CENTER),
                         ft.Divider(height=8),
                         ft.Row([
                             self.sign_position,
                             ft.Column([
-                                ft.Text("缩放比例:", size=12),
+                                ft.Text(_("缩放比例:"), size=12),
                                 ft.Row([self.sign_scale_slider, sign_scale_text], spacing=4),
                             ], spacing=2),
                         ], spacing=20, vertical_alignment=ft.CrossAxisAlignment.START),
                         ft.Divider(height=8),
-                        ft.FilledButton("添加签名", icon=ft.Icons.DRAW_OUTLINED, on_click=lambda _: self._do_sign()),
+                        ft.FilledButton(_("添加签名"), icon=ft.Icons.DRAW_OUTLINED, on_click=lambda _: self._do_sign()),
                     ], spacing=12),
                     padding=24, border_radius=12,
                     border=ft.border.all(1, ft.Colors.OUTLINE_VARIANT), bgcolor=ft.Colors.WHITE,
@@ -1314,27 +1260,27 @@ class PDFConverterUI:
             padding=ft.padding.all(24), expand=True,
         )
 
-        # --- 标签页 5: 加密 PDF ---
-        self.protect_pdf_label = ft.Text("未选择文件", size=12, color=ft.Colors.GREY_600)
-        self.protect_pwd_field = ft.TextField(label="用户密码", password=True, can_reveal_password=True, width=280)
-        self.protect_owner_pwd_field = ft.TextField(label="所有者密码 (可选)", password=True, can_reveal_password=True, width=280)
+        # --- Tab 5: Encrypt PDF ---
+        self.protect_pdf_label = ft.Text(_("未选择文件"), size=12, color=ft.Colors.GREY_600)
+        self.protect_pwd_field = ft.TextField(label=_("用户密码"), password=True, can_reveal_password=True, width=280)
+        self.protect_owner_pwd_field = ft.TextField(label=_("所有者密码 (可选)"), password=True, can_reveal_password=True, width=280)
 
         protect_tab_content = ft.Container(
             content=ft.Column([
-                ft.Text("为 PDF 添加密码保护", size=15, weight=ft.FontWeight.W_500),
+                ft.Text(_("为 PDF 添加密码保护"), size=15, weight=ft.FontWeight.W_500),
                 ft.Divider(height=12),
                 ft.Container(
                     content=ft.Column([
                         ft.Row([
-                            ft.OutlinedButton("选择 PDF", icon=ft.Icons.FILE_OPEN,
+                            ft.OutlinedButton(_("选择 PDF"), icon=ft.Icons.FILE_OPEN,
                                 on_click=lambda _: protect_pdf_picker.pick_files(
-                                    dialog_title="选择要加密的 PDF", allowed_extensions=["pdf"],
+                                    dialog_title=_("选择要加密的 PDF"), allowed_extensions=["pdf"],
                                     allow_multiple=False, file_type=ft.FilePickerFileType.CUSTOM)),
                             self.protect_pdf_label,
                         ], spacing=12),
                         ft.Divider(height=8),
                         self.protect_pwd_field, self.protect_owner_pwd_field, ft.Divider(height=8),
-                        ft.FilledButton("加密 PDF", icon=ft.Icons.LOCK_OUTLINED, on_click=lambda _: self._do_protect()),
+                        ft.FilledButton(_("加密 PDF"), icon=ft.Icons.LOCK_OUTLINED, on_click=lambda _: self._do_protect()),
                     ], spacing=12),
                     padding=24, border_radius=12,
                     border=ft.border.all(1, ft.Colors.OUTLINE_VARIANT), bgcolor=ft.Colors.WHITE,
@@ -1343,23 +1289,23 @@ class PDFConverterUI:
             padding=ft.padding.all(24), expand=True,
         )
 
-        # --- 标签页 6: 解密 PDF ---
-        self.unlock_pdf_label = ft.Text("未选择文件", size=12, color=ft.Colors.GREY_600)
+        # --- Tab 6: Decrypt PDF ---
+        self.unlock_pdf_label = ft.Text(_("未选择文件"), size=12, color=ft.Colors.GREY_600)
         self.unlock_status = ft.Text("", size=13, weight=ft.FontWeight.W_500)
-        self.unlock_pwd_field = ft.TextField(label="密码", password=True, can_reveal_password=True, visible=False, width=280)
-        self.unlock_btn = ft.FilledButton("解密 PDF", icon=ft.Icons.LOCK_OPEN_OUTLINED, disabled=True,
+        self.unlock_pwd_field = ft.TextField(label=_("密码"), password=True, can_reveal_password=True, visible=False, width=280)
+        self.unlock_btn = ft.FilledButton(_("解密 PDF"), icon=ft.Icons.LOCK_OPEN_OUTLINED, disabled=True,
                                           on_click=lambda _: self._do_unlock())
 
         unlock_tab_content = ft.Container(
             content=ft.Column([
-                ft.Text("移除 PDF 的密码保护", size=15, weight=ft.FontWeight.W_500),
+                ft.Text(_("移除 PDF 的密码保护"), size=15, weight=ft.FontWeight.W_500),
                 ft.Divider(height=12),
                 ft.Container(
                     content=ft.Column([
                         ft.Row([
-                            ft.OutlinedButton("选择 PDF", icon=ft.Icons.FILE_OPEN,
+                            ft.OutlinedButton(_("选择 PDF"), icon=ft.Icons.FILE_OPEN,
                                 on_click=lambda _: unlock_pdf_picker.pick_files(
-                                    dialog_title="选择要解密的 PDF", allowed_extensions=["pdf"],
+                                    dialog_title=_("选择要解密的 PDF"), allowed_extensions=["pdf"],
                                     allow_multiple=False, file_type=ft.FilePickerFileType.CUSTOM)),
                             self.unlock_pdf_label,
                         ], spacing=12),
@@ -1374,34 +1320,34 @@ class PDFConverterUI:
             padding=ft.padding.all(24), expand=True,
         )
 
-        # --- 标签页 7: 旋转 PDF ---
+        # --- Tab 7: Rotate PDF ---
         self.rotate_list = ft.ListView(expand=True, spacing=2)
         self.rotate_count = ft.Text("", size=12, color=ft.Colors.GREY_600)
         self.rotate_page_mode = ft.RadioGroup(
             value="all",
             content=ft.Row([
-                ft.Radio(value="all", label="所有页"),
-                ft.Radio(value="range", label="指定页码 (如: 1,3,5-10)"),
+                ft.Radio(value="all", label=_("所有页")),
+                ft.Radio(value="range", label=_("指定页码 (如: 1,3,5-10)")),
             ], spacing=16),
             visible=False, on_change=self._on_rotate_page_mode_changed,
         )
-        self.rotate_page_entry = ft.TextField(label="页码范围", hint_text="1,3,5-10", width=200, visible=False)
+        self.rotate_page_entry = ft.TextField(label=_("页码范围"), hint_text=_("1,3,5-10"), width=200, visible=False)
         self.rotate_angle_dd = ft.Dropdown(
-            label="旋转角度", value="90cw", width=180,
+            label=_("旋转角度"), value="90cw", width=180,
             options=[
-                ft.dropdown.Option("90cw", "顺时针 90°"),
-                ft.dropdown.Option("90ccw", "逆时针 90°"),
-                ft.dropdown.Option("180", "180°"),
+                ft.dropdown.Option("90cw", _("顺时针 90°")),
+                ft.dropdown.Option("90ccw", _("逆时针 90°")),
+                ft.dropdown.Option("180", _("180°")),
             ],
         )
-        self.rotate_btn = ft.FilledButton("旋转", icon=ft.Icons.ROTATE_90_DEGREES_CW, disabled=True,
+        self.rotate_btn = ft.FilledButton(_("旋转"), icon=ft.Icons.ROTATE_90_DEGREES_CW, disabled=True,
                                           on_click=lambda _: self._do_rotate())
 
         rotate_tab_content = ft.Container(
             content=ft.Row([
                 ft.Container(
                     content=ft.Column([
-                        ft.Row([ft.Text("待旋转列表", size=15, weight=ft.FontWeight.W_500), self.rotate_count]),
+                        ft.Row([ft.Text(_("待旋转列表"), size=15, weight=ft.FontWeight.W_500), self.rotate_count]),
                         ft.Divider(height=4), self.rotate_list,
                     ], expand=True),
                     expand=True, border_radius=12,
@@ -1409,9 +1355,9 @@ class PDFConverterUI:
                 ),
                 ft.Container(
                     content=ft.Column([
-                        ft.IconButton(icon=ft.Icons.ADD, tooltip="添加 PDF", icon_color=ft.Colors.BLUE_600,
+                        ft.IconButton(icon=ft.Icons.ADD, tooltip=_("添加 PDF"), icon_color=ft.Colors.BLUE_600,
                             on_click=lambda _: rotate_picker.pick_files(
-                                dialog_title="选择要旋转的 PDF", allowed_extensions=["pdf"],
+                                dialog_title=_("选择要旋转的 PDF"), allowed_extensions=["pdf"],
                                 allow_multiple=True, file_type=ft.FilePickerFileType.CUSTOM)),
                         ft.Divider(height=12),
                         self.rotate_page_mode, self.rotate_page_entry, ft.Divider(height=12),
@@ -1423,29 +1369,29 @@ class PDFConverterUI:
             padding=ft.padding.all(24), expand=True,
         )
 
-        # --- 标签页 8: 裁剪 PDF ---
+        # --- Tab 8: Crop PDF ---
         self.crop_list = ft.ListView(expand=True, spacing=2)
         self.crop_count = ft.Text("", size=12, color=ft.Colors.GREY_600)
         self.crop_page_mode = ft.RadioGroup(
             value="all",
             content=ft.Row([
-                ft.Radio(value="all", label="所有页"),
-                ft.Radio(value="range", label="指定页码 (如: 1,3,5-10)"),
+                ft.Radio(value="all", label=_("所有页")),
+                ft.Radio(value="range", label=_("指定页码 (如: 1,3,5-10)")),
             ], spacing=16),
             visible=False, on_change=self._on_crop_page_mode_changed,
         )
-        self.crop_page_entry = ft.TextField(label="页码范围", hint_text="1,3,5-10", width=200, visible=False)
-        self.crop_top = ft.TextField(label="上 (pt)", value="0", width=90, text_size=13)
-        self.crop_bottom = ft.TextField(label="下 (pt)", value="0", width=90, text_size=13)
-        self.crop_left = ft.TextField(label="左 (pt)", value="0", width=90, text_size=13)
-        self.crop_right = ft.TextField(label="右 (pt)", value="0", width=90, text_size=13)
-        self.crop_btn = ft.FilledButton("裁剪", icon=ft.Icons.CROP, disabled=True, on_click=lambda _: self._do_crop())
+        self.crop_page_entry = ft.TextField(label=_("页码范围"), hint_text=_("1,3,5-10"), width=200, visible=False)
+        self.crop_top = ft.TextField(label=_("上 (pt)"), value="0", width=90, text_size=13)
+        self.crop_bottom = ft.TextField(label=_("下 (pt)"), value="0", width=90, text_size=13)
+        self.crop_left = ft.TextField(label=_("左 (pt)"), value="0", width=90, text_size=13)
+        self.crop_right = ft.TextField(label=_("右 (pt)"), value="0", width=90, text_size=13)
+        self.crop_btn = ft.FilledButton(_("裁剪"), icon=ft.Icons.CROP, disabled=True, on_click=lambda _: self._do_crop())
 
         crop_tab_content = ft.Container(
             content=ft.Row([
                 ft.Container(
                     content=ft.Column([
-                        ft.Row([ft.Text("待裁剪列表", size=15, weight=ft.FontWeight.W_500), self.crop_count]),
+                        ft.Row([ft.Text(_("待裁剪列表"), size=15, weight=ft.FontWeight.W_500), self.crop_count]),
                         ft.Divider(height=4), self.crop_list,
                     ], expand=True),
                     expand=True, border_radius=12,
@@ -1453,13 +1399,13 @@ class PDFConverterUI:
                 ),
                 ft.Container(
                     content=ft.Column([
-                        ft.IconButton(icon=ft.Icons.ADD, tooltip="添加 PDF", icon_color=ft.Colors.BLUE_600,
+                        ft.IconButton(icon=ft.Icons.ADD, tooltip=_("添加 PDF"), icon_color=ft.Colors.BLUE_600,
                             on_click=lambda _: crop_picker.pick_files(
-                                dialog_title="选择要裁剪的 PDF", allowed_extensions=["pdf"],
+                                dialog_title=_("选择要裁剪的 PDF"), allowed_extensions=["pdf"],
                                 allow_multiple=True, file_type=ft.FilePickerFileType.CUSTOM)),
                         ft.Divider(height=12),
                         self.crop_page_mode, self.crop_page_entry, ft.Divider(height=12),
-                        ft.Text("裁剪边距 (1pt ≈ 0.353mm):", size=12, weight=ft.FontWeight.W_500),
+                        ft.Text(_("裁剪边距 (1pt ≈ 0.353mm):"), size=12, weight=ft.FontWeight.W_500),
                         ft.Row([self.crop_top, self.crop_bottom], spacing=8),
                         ft.Row([self.crop_left, self.crop_right], spacing=8),
                         ft.Divider(height=16), self.crop_btn,
@@ -1470,28 +1416,29 @@ class PDFConverterUI:
             padding=ft.padding.all(24), expand=True,
         )
 
-        # --- 标签页 9: 水印 PDF ---
+        # --- Tab 9: Watermark PDF ---
         self.watermark_list = ft.ListView(expand=True, spacing=2)
 
         self.wm_type = ft.RadioGroup(
             value="text",
             content=ft.Row([
-                ft.Radio(value="text", label="文字水印"),
-                ft.Radio(value="image", label="图片水印"),
+                ft.Radio(value="text", label=_("文字水印")),
+                ft.Radio(value="image", label=_("图片水印")),
             ], spacing=16),
         )
         self.wm_type.on_change = lambda _: self._update_wm_visibility() or page.update()
 
+        NOFONT = _("(无字体)")
         self.wm_font_display = ft.TextField(
-            label="字体",
-            value=self.system_font_names[0] if self.system_font_names else "(无字体)",
+            label=_("字体"),
+            value=self.system_font_names[0] if self.system_font_names else NOFONT,
             width=160, read_only=True, dense=True,
         )
-        self.wm_font_btn = ft.IconButton(icon=ft.Icons.FONT_DOWNLOAD, tooltip="选择字体", icon_size=18,
+        self.wm_font_btn = ft.IconButton(icon=ft.Icons.FONT_DOWNLOAD, tooltip=_("选择字体"), icon_size=18,
                                          on_click=self._show_font_picker)
-        self.wm_text = ft.TextField(label="水印文本", value="机密", width=200)
+        self.wm_text = ft.TextField(label=_("水印文本"), value=_("机密"), width=200)
         _FONT_SIZES = ["8", "9", "10", "11", "12", "14", "16", "18", "20", "22", "24", "26", "28", "36", "48", "72", "96", "120"]
-        self.wm_font_size = ft.Dropdown(label="字号", value="48", width=90,
+        self.wm_font_size = ft.Dropdown(label=_("字号"), value="48", width=90,
                                         options=[ft.dropdown.Option(sz, sz) for sz in _FONT_SIZES])
 
         self.wm_color_swatch = ft.Container(
@@ -1505,61 +1452,66 @@ class PDFConverterUI:
         )
 
         self.wm_img_scale = ft.Slider(min=10, max=200, value=50, divisions=19, label="{value}%", width=220, visible=False)
-        self.wm_img_btn = ft.OutlinedButton("选择水印图片", icon=ft.Icons.IMAGE_OUTLINED, visible=False,
+        self.wm_img_btn = ft.OutlinedButton(_("选择水印图片"), icon=ft.Icons.IMAGE_OUTLINED, visible=False,
                                             on_click=lambda _: watermark_img_picker.pick_files(
-                                                dialog_title="选择水印图片", allowed_extensions=["png", "jpg", "jpeg"],
+                                                dialog_title=_("选择水印图片"), allowed_extensions=["png", "jpg", "jpeg"],
                                                 allow_multiple=False, file_type=ft.FilePickerFileType.CUSTOM))
-        self.watermark_img_label = ft.Text("未选择", size=12, color=ft.Colors.GREY_600, visible=False)
+        self.watermark_img_label = ft.Text(_("未选择"), size=12, color=ft.Colors.GREY_600, visible=False)
 
         self.wm_opacity = ft.Slider(min=5, max=100, value=30, divisions=19, label="{value}%", width=220)
-        _ROTATION_ANGLES = [("0", "0° 水平"), ("45", "45° 对角线"), ("-45", "-45° 对角线"), ("90", "90°"), ("-90", "-90°")]
-        self.wm_rotation = ft.Dropdown(label="旋转角度", value="0", width=140,
+        _ROTATION_ANGLES = [("0", _("0° 水平")), ("45", _("45° 对角线")), ("-45", _("-45° 对角线")), ("90", _("90°")), ("-90", _("-90°"))]
+        self.wm_rotation = ft.Dropdown(label=_("旋转角度"), value="0", width=140,
                                        options=[ft.dropdown.Option(k, v) for k, v in _ROTATION_ANGLES])
         self.wm_layer_mode = ft.RadioGroup(
             value="front",
-            content=ft.Row([ft.Radio(value="front", label="在内容之前"), ft.Radio(value="behind", label="在内容之后")], spacing=16),
+            content=ft.Row([ft.Radio(value="front", label=_("在内容之前")),
+                            ft.Radio(value="behind", label=_("在内容之后"))], spacing=16),
         )
-        self.wm_vert = ft.Dropdown(label="垂直位置", value="center", width=140,
-                                   options=[ft.dropdown.Option("top", "顶部"), ft.dropdown.Option("center", "居中"), ft.dropdown.Option("bottom", "底部")])
-        self.wm_horiz = ft.Dropdown(label="水平位置", value="center", width=140,
-                                    options=[ft.dropdown.Option("left", "左"), ft.dropdown.Option("center", "居中"), ft.dropdown.Option("right", "右")])
-        self.wm_offset_x = ft.TextField(label="X 偏移 (pt)", value="0", width=110, text_size=13)
-        self.wm_offset_y = ft.TextField(label="Y 偏移 (pt)", value="0", width=110, text_size=13)
+        self.wm_vert = ft.Dropdown(label=_("垂直位置"), value="center", width=140,
+                                   options=[ft.dropdown.Option("top", _("顶部")),
+                                            ft.dropdown.Option("center", _("居中")),
+                                            ft.dropdown.Option("bottom", _("底部"))])
+        self.wm_horiz = ft.Dropdown(label=_("水平位置"), value="center", width=140,
+                                    options=[ft.dropdown.Option("left", _("左")),
+                                             ft.dropdown.Option("center", _("居中")),
+                                             ft.dropdown.Option("right", _("右"))])
+        self.wm_offset_x = ft.TextField(label=_("X 偏移 (pt)"), value="0", width=110, text_size=13)
+        self.wm_offset_y = ft.TextField(label=_("Y 偏移 (pt)"), value="0", width=110, text_size=13)
 
         self.wm_page_mode = ft.RadioGroup(
             value="all",
             content=ft.Row([
-                ft.Radio(value="all", label="所有页"), ft.Radio(value="range", label="页码范围"),
-                ft.Radio(value="even", label="仅偶数页"), ft.Radio(value="odd", label="仅奇数页"),
+                ft.Radio(value="all", label=_("所有页")), ft.Radio(value="range", label=_("页码范围")),
+                ft.Radio(value="even", label=_("仅偶数页")), ft.Radio(value="odd", label=_("仅奇数页")),
             ], spacing=8, wrap=True),
         )
         self.wm_page_mode.on_change = lambda _: self._update_wm_visibility() or page.update()
-        self.wm_page_entry = ft.TextField(label="页码 (如 1,3,5-10)", hint_text="1,3,5-10", width=200, visible=False)
+        self.wm_page_entry = ft.TextField(label=_("页码 (如 1,3,5-10)"), hint_text=_("1,3,5-10"), width=200, visible=False)
 
-        self.wm_preset_dd = ft.Dropdown(label="已存预设", width=180,
+        self.wm_preset_dd = ft.Dropdown(label=_("已存预设"), width=180,
                                         options=[ft.dropdown.Option(k, k) for k in sorted(self.watermark_presets.keys())])
-        self.wm_preset_name = ft.TextField(label="预设名称", width=150, text_size=13)
-        wm_preview_btn = ft.FilledButton("预览", icon=ft.Icons.VISIBILITY_OUTLINED, on_click=lambda _: self._do_watermark_preview())
-        wm_apply_btn = ft.FilledButton("应用水印", icon=ft.Icons.BRANDING_WATERMARK, on_click=lambda _: self._do_watermark_apply())
+        self.wm_preset_name = ft.TextField(label=_("预设名称"), width=150, text_size=13)
+        wm_preview_btn = ft.FilledButton(_("预览"), icon=ft.Icons.VISIBILITY_OUTLINED, on_click=lambda _: self._do_watermark_preview())
+        wm_apply_btn = ft.FilledButton(_("应用水印"), icon=ft.Icons.BRANDING_WATERMARK, on_click=lambda _: self._do_watermark_apply())
 
         settings_col = ft.Column([
-            ft.Text("水印类型", weight=ft.FontWeight.W_500, size=13), self.wm_type, ft.Divider(height=4),
-            ft.Text("文字设置", weight=ft.FontWeight.W_500, size=13), self.wm_text,
+            ft.Text(_("水印类型"), weight=ft.FontWeight.W_500, size=13), self.wm_type, ft.Divider(height=4),
+            ft.Text(_("文字设置"), weight=ft.FontWeight.W_500, size=13), self.wm_text,
             ft.Row([self.wm_font_display, self.wm_font_btn, self.wm_font_size], spacing=4,
                    vertical_alignment=ft.CrossAxisAlignment.CENTER),
             ft.Row([self.wm_color_swatch, self.wm_color_hex_field, self.wm_rotation,
-                    ft.Text("不透明度", size=12), self.wm_opacity],
+                    ft.Text(_("不透明度"), size=12), self.wm_opacity],
                    spacing=8, wrap=True, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             self.wm_img_scale, self.wm_img_btn, self.watermark_img_label, ft.Divider(height=4),
-            ft.Text("图层", weight=ft.FontWeight.W_500, size=13), self.wm_layer_mode, ft.Divider(height=4),
-            ft.Text("位置", weight=ft.FontWeight.W_500, size=13),
+            ft.Text(_("图层"), weight=ft.FontWeight.W_500, size=13), self.wm_layer_mode, ft.Divider(height=4),
+            ft.Text(_("位置"), weight=ft.FontWeight.W_500, size=13),
             ft.Row([self.wm_vert, self.wm_horiz], spacing=8),
             ft.Row([self.wm_offset_x, self.wm_offset_y], spacing=8), ft.Divider(height=4),
-            ft.Text("页面范围", weight=ft.FontWeight.W_500, size=13), self.wm_page_mode, self.wm_page_entry, ft.Divider(height=4),
-            ft.Text("预设", weight=ft.FontWeight.W_500, size=13),
-            ft.Row([self.wm_preset_name, ft.FilledButton("保存", icon=ft.Icons.SAVE, on_click=lambda _: self._save_current_preset())], spacing=8),
-            ft.Row([self.wm_preset_dd, ft.IconButton(icon=ft.Icons.DOWNLOAD, tooltip="加载", on_click=lambda _: self._load_selected_preset()),
-                    ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, tooltip="删除", on_click=lambda _: self._delete_selected_preset())], spacing=4),
+            ft.Text(_("页面范围"), weight=ft.FontWeight.W_500, size=13), self.wm_page_mode, self.wm_page_entry, ft.Divider(height=4),
+            ft.Text(_("预设"), weight=ft.FontWeight.W_500, size=13),
+            ft.Row([self.wm_preset_name, ft.FilledButton(_("保存"), icon=ft.Icons.SAVE, on_click=lambda _: self._save_current_preset())], spacing=8),
+            ft.Row([self.wm_preset_dd, ft.IconButton(icon=ft.Icons.DOWNLOAD, tooltip=_("加载"), on_click=lambda _: self._load_selected_preset()),
+                    ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, tooltip=_("删除"), on_click=lambda _: self._delete_selected_preset())], spacing=4),
             ft.Divider(height=8),
             ft.Row([wm_preview_btn, wm_apply_btn], spacing=12, alignment=ft.MainAxisAlignment.CENTER),
         ], spacing=6, scroll=ft.ScrollMode.AUTO, expand=True)
@@ -1568,7 +1520,7 @@ class PDFConverterUI:
             content=ft.Row([
                 ft.Container(
                     content=ft.Column([
-                        ft.Row([ft.Text("待添加水印列表", size=15, weight=ft.FontWeight.W_500)]),
+                        ft.Row([ft.Text(_("待添加水印列表"), size=15, weight=ft.FontWeight.W_500)]),
                         ft.Divider(height=4), self.watermark_list,
                     ], expand=True),
                     expand=True, border_radius=12,
@@ -1576,9 +1528,9 @@ class PDFConverterUI:
                 ),
                 ft.Container(
                     content=ft.Column([
-                        ft.IconButton(icon=ft.Icons.ADD, tooltip="添加 PDF", icon_color=ft.Colors.BLUE_600,
+                        ft.IconButton(icon=ft.Icons.ADD, tooltip=_("添加 PDF"), icon_color=ft.Colors.BLUE_600,
                             on_click=lambda _: watermark_pdf_picker.pick_files(
-                                dialog_title="选择要加水印的 PDF", allowed_extensions=["pdf"],
+                                dialog_title=_("选择要加水印的 PDF"), allowed_extensions=["pdf"],
                                 allow_multiple=True, file_type=ft.FilePickerFileType.CUSTOM)),
                         ft.Divider(height=4), settings_col,
                     ], spacing=0, expand=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
@@ -1588,30 +1540,30 @@ class PDFConverterUI:
             padding=ft.padding.all(24), expand=True,
         )
 
-        # --- 子选项卡 ---
+        # --- Sub-tabs ---
         self.tabs = ft.Tabs(
             selected_index=0,
             scrollable=True,
             tabs=[
-                ft.Tab(text="ZIP 转 PDF", icon=ft.Icons.ARCHIVE_OUTLINED, content=zip_tab_content),
-                ft.Tab(text="合并 PDF", icon=ft.Icons.MERGE_TYPE, content=merge_tab_content),
-                ft.Tab(text="拆分/提取 PDF", icon=ft.Icons.CALL_SPLIT, content=split_tab_content),
-                ft.Tab(text="签名 PDF", icon=ft.Icons.DRAW_OUTLINED, content=sign_tab_content),
-                ft.Tab(text="加密 PDF", icon=ft.Icons.LOCK_OUTLINED, content=protect_tab_content),
-                ft.Tab(text="解密 PDF", icon=ft.Icons.LOCK_OPEN_OUTLINED, content=unlock_tab_content),
-                ft.Tab(text="旋转 PDF", icon=ft.Icons.ROTATE_90_DEGREES_CW, content=rotate_tab_content),
-                ft.Tab(text="裁剪 PDF", icon=ft.Icons.CROP, content=crop_tab_content),
-                ft.Tab(text="水印 PDF", icon=ft.Icons.BRANDING_WATERMARK, content=watermark_tab_content),
+                ft.Tab(text=_("ZIP 转 PDF"), icon=ft.Icons.ARCHIVE_OUTLINED, content=zip_tab_content),
+                ft.Tab(text=_("合并 PDF"), icon=ft.Icons.MERGE_TYPE, content=merge_tab_content),
+                ft.Tab(text=_("拆分/提取 PDF"), icon=ft.Icons.CALL_SPLIT, content=split_tab_content),
+                ft.Tab(text=_("签名 PDF"), icon=ft.Icons.DRAW_OUTLINED, content=sign_tab_content),
+                ft.Tab(text=_("加密 PDF"), icon=ft.Icons.LOCK_OUTLINED, content=protect_tab_content),
+                ft.Tab(text=_("解密 PDF"), icon=ft.Icons.LOCK_OPEN_OUTLINED, content=unlock_tab_content),
+                ft.Tab(text=_("旋转 PDF"), icon=ft.Icons.ROTATE_90_DEGREES_CW, content=rotate_tab_content),
+                ft.Tab(text=_("裁剪 PDF"), icon=ft.Icons.CROP, content=crop_tab_content),
+                ft.Tab(text=_("水印 PDF"), icon=ft.Icons.BRANDING_WATERMARK, content=watermark_tab_content),
             ],
             expand=True,
         )
 
-        # --- 日志面板 ---
+        # --- Log Panel ---
         log_panel = ft.Container(
             content=ft.Column([
                 ft.Row([
                     ft.Icon(ft.Icons.TERMINAL, size=16, color=ft.Colors.GREY_600),
-                    ft.Text("运行日志", weight=ft.FontWeight.W_500, size=13),
+                    ft.Text(_("运行日志"), weight=ft.FontWeight.W_500, size=13),
                 ]),
                 ft.Divider(height=4),
                 self.log_list,
@@ -1622,14 +1574,14 @@ class PDFConverterUI:
             height=140,
         )
 
-        # --- 初始选中第一个字体 ---
+        # --- Initial font selection ---
         if self.system_font_names:
             self._select_font(self.system_font_names[0])
 
         return top_bar, self.tabs, log_panel
 
     async def setup(self):
-        """启用拖放并启动轮询（build 之后调用）。"""
+        """Enable drag-drop and start polling (call after build)."""
         await asyncio.sleep(0.3)
-        enable_dragdrop("全能 PDF 工具箱")
+        enable_dragdrop(_("全能 PDF 工具箱"))
         self.page.run_task(self._poll_drops)

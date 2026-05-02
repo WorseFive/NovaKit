@@ -259,6 +259,12 @@ def get_desktop_path():
 
 
 def load_config():
+    """Load saved output_dir from config. Delegates to settings module for full config."""
+    try:
+        from modules.settings import load_app_settings
+        return load_app_settings()["output_dir"]
+    except Exception:
+        pass
     if os.path.exists(CONFIG_FILE):
         try:
             with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
@@ -272,6 +278,13 @@ def load_config():
 
 
 def save_config(output_dir):
+    """Save output_dir. Delegates to settings module for full config."""
+    try:
+        from modules.settings import save_app_settings
+        save_app_settings(output_dir=output_dir)
+        return
+    except Exception:
+        pass
     try:
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             json.dump({"output_dir": output_dir}, f, ensure_ascii=False, indent=4)
